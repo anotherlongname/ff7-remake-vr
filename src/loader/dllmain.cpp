@@ -67,13 +67,23 @@ void load_config_early(const std::filesystem::path& ini) {
     for (auto& line : graphics_profile::apply(g_config)) g_profile_log.push_back(std::move(line));
 }
 
+// The game itself, as opposed to a starter or tool that loads this DLL. Steam/Epic:
+// End\Binaries\Win64\ff7remake_.exe (ff7remake.exe there is only a starter in the game's root
+// folder). Microsoft Store / Xbox app: End\Binaries\WinGDK\ff7remake.exe is the game.
+bool is_game_exe(const std::filesystem::path& exe) {
+    const auto name = exe.filename().wstring();
+    const auto dir = exe.parent_path().filename().wstring();
+    return _wcsicmp(name.c_str(), L"ff7remake_.exe") == 0 ||
+           (_wcsicmp(name.c_str(), L"ff7remake.exe") == 0 && _wcsicmp(dir.c_str(), L"WinGDK") == 0);
+}
+
 // The mod's D3D11 hooks need the engine to choose Direct3D 11; without a
 // graphics option on its command line it chooses Direct3D 12. The engine reads
 // the command line only after every DLL the exe imports is initialised, so the
 // option can still be added here. Runs in DllMain, before the engine starts.
 void ensure_d3d11() {
     auto exe = module::main_module();
-    if (_wcsicmp(exe.path.filename().c_str(), L"ff7remake_.exe") != 0) return;
+    if (!is_game_exe(exe.path)) return;
     if (!g_config.get_bool("loader", "force_d3d11", true)) {
         g_d3d11.message = "d3d11: [loader] force_d3d11 = 0, command line left as it is";
         return;
@@ -179,14 +189,7 @@ DWORD WINAPI bootstrap(void*) {
     ctx.dll_dir = dll_dir;
     ctx.game_base = game.base;
     ctx.game_size = game.size;
-    // Steam/Epic: End\Binaries\Win64\ff7remake_.exe (ff7remake.exe there is only a starter in the
-    // game's root folder). Microsoft Store / Xbox app: End\Binaries\WinGDK\ff7remake.exe is the game.
-    {
-        const auto exe_name = game.path.filename().wstring();
-        const auto exe_dir = game.path.parent_path().filename().wstring();
-        ctx.is_game = _wcsicmp(exe_name.c_str(), L"ff7remake_.exe") == 0 ||
-                      (_wcsicmp(exe_name.c_str(), L"ff7remake.exe") == 0 && _wcsicmp(exe_dir.c_str(), L"WinGDK") == 0);
-    }
+    ctx.is_game = is_game_exe(game.path);
     loader::start_modules(ctx);
     log::info("ff7vr: initialised, idle");
 

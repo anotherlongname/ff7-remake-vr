@@ -26,6 +26,7 @@
 #include "startup.h"
 
 #include "dev_input.h"
+#include "image_dump.h"
 #include "xinput_proxy.h"
 
 #include "ff7vr/core/dev_commands.h"
@@ -47,6 +48,11 @@ namespace ff7vr::loader {
 
 void start_modules(const StartupContext& ctx) {
     const Config& cfg = *ctx.config;
+
+    // [debug] dump_game_image = 1: the game's code as mapped, before any hook patches it, for
+    // finding signatures in a build the mod does not know (see image_dump.h).
+    if (ctx.is_game && cfg.get_bool("debug", "dump_game_image", false))
+        log::info("{}", dump_game_image(ctx.dll_dir / "ff7remake-image.bin"));
 
     // Dev command pipe and virtual pad (send-input.ps1). Off unless the ini enables it.
     // Commands that patch memory or call game functions need [dev] unsafe_commands = 1 as well.
@@ -81,7 +87,7 @@ void start_modules(const StartupContext& ctx) {
     ff7vr::dev::start(ctx);
 #endif
 
-    log::info("startup: modules started{}", ctx.is_game ? "" : " (host is not ff7remake_.exe)");
+    log::info("startup: modules started{}", ctx.is_game ? "" : " (host is not the game exe)");
 }
 
 void stop_modules() {

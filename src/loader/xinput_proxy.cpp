@@ -236,7 +236,12 @@ std::string describe(const void* p) {
     return std::format("{}+{:#x}", who, reinterpret_cast<std::uintptr_t>(p) - reinterpret_cast<std::uintptr_t>(m));
 }
 
-// Where the game's own XInput imports point (its import table for xinput1_3.dll).
+// The XInput DLL names this DLL is installed under: xinput1_3 (Steam, Epic), xinput1_4 (Xbox app).
+bool is_xinput_import(const char* name) {
+    return _stricmp(name, "xinput1_3.dll") == 0 || _stricmp(name, "xinput1_4.dll") == 0;
+}
+
+// Where the game's own XInput imports point (its import table for xinput1_3.dll or xinput1_4.dll).
 std::string import_check() {
     auto* base = reinterpret_cast<const unsigned char*>(GetModuleHandleW(nullptr));
     if (!base) return "game module not found";
@@ -247,14 +252,14 @@ std::string import_check() {
     std::string out;
     for (auto* d = reinterpret_cast<const IMAGE_IMPORT_DESCRIPTOR*>(base + dir.VirtualAddress); d->Name; ++d) {
         const char* name = reinterpret_cast<const char*>(base + d->Name);
-        if (_stricmp(name, "xinput1_3.dll") != 0) continue;
+        if (!is_xinput_import(name)) continue;
         int i = 0;
         for (auto* t = reinterpret_cast<const IMAGE_THUNK_DATA*>(base + d->FirstThunk); t->u1.Function; ++t, ++i) {
             if (!out.empty()) out += ", ";
             out += std::format("game import {} -> {}", i, describe(reinterpret_cast<const void*>(t->u1.Function)));
         }
     }
-    return out.empty() ? "the game does not import xinput1_3.dll" : out;
+    return out.empty() ? "the game does not import xinput1_3.dll or xinput1_4.dll" : out;
 }
 
 // A jump target, followed through one relay ("jmp [rip+0]; <address>", as hook libraries
@@ -454,7 +459,7 @@ std::string install_import_wrapper() {
     const IMAGE_DATA_DIRECTORY& dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
     if (!dir.VirtualAddress) return "no import table";
     for (auto* d = reinterpret_cast<const IMAGE_IMPORT_DESCRIPTOR*>(base + dir.VirtualAddress); d->Name; ++d) {
-        if (_stricmp(reinterpret_cast<const char*>(base + d->Name), "xinput1_3.dll") != 0) continue;
+        if (!is_xinput_import(reinterpret_cast<const char*>(base + d->Name))) continue;
         for (auto* t = reinterpret_cast<IMAGE_THUNK_DATA*>(base + d->FirstThunk); t->u1.Function; ++t) {
             if (reinterpret_cast<const void*>(t->u1.Function) != ours) continue;
             g_entry = &proxy_XInputGetState;
