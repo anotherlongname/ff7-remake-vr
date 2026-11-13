@@ -23,6 +23,11 @@ struct Sig {
     Rule rule;
     int a, b, c;           // Rip: insn, disp, len; Match/I32/U8: offset in a
     std::int64_t expect;   // value for file version 1.0.0.7 (RVA or offset)
+    // Microsoft Store / Xbox app build (WinGDK, 1.0.334.0): the same code, compiled with other
+    // registers and frame sizes. Tried only when `pattern` finds nothing; a, b, c as above
+    // (-1: the same as for `pattern`).
+    const char* alt = nullptr;
+    int alt_a = -1, alt_b = -1, alt_c = -1;
 };
 
 // Copied from tools/re/signatures.json. Keep the two in sync.
@@ -32,16 +37,20 @@ constexpr Sig kGEngine{"GEngine",
 constexpr Sig kInitializeHMDDevice{
     "UEngine::InitializeHMDDevice",
     "48 8B C4 48 89 48 08 55 41 56 41 57 48 8D 68 88 48 81 EC 60 01 00 00 80 3D ?? ?? ?? ?? 00 4C 8B F1 0F 85 ?? ?? ?? ??",
-    Rule::Match, 0, 0, 0, 0x3317ca0};
+    Rule::Match, 0, 0, 0, 0x3317ca0,
+    // Xbox app: frame 0x120 instead of 0x160 (RVA 0x2ea07d0, UGameEngine vtable slot 111 as on Steam).
+    "48 8B C4 48 89 48 08 55 41 56 41 57 48 8D 68 C8 48 81 EC 20 01 00 00 80 3D ?? ?? ?? ?? 00 4C 8B F1 0F 85 ?? ?? ?? ??"};
 constexpr Sig kGameEngineVtable{"UGameEngine::vftable",
                                 "48 8D 05 ?? ?? ?? ?? 48 89 03 48 8D 05 ?? ?? ?? ?? 48 89 43 28 33 C0 48 89 83 78 10 00 00",
                                 Rule::Rip, 0, 3, 7, 0x4e56fa8};
 constexpr Sig kGameEngineTick{"UGameEngine::Tick", "48 8B C4 44 88 40 18 48 89 48 08 55 41 55", Rule::Match, 0, 0, 0,
                               0x2f32420};
 constexpr Sig kSlotInitializeHMDDevice{"UEngine slot InitializeHMDDevice", "FF 90 ?? ?? ?? ?? 44 38 25 ?? ?? ?? ?? 74 08",
-                                       Rule::I32, 2, 0, 0, 0x378};
+                                       Rule::I32, 2, 0, 0, 0x378,
+                                       "FF 90 ?? ?? ?? ?? 44 38 2D ?? ?? ?? ?? 0F 85"};  // Xbox app: r13b, jne
 constexpr Sig kStereoRenderingDevice{"UEngine::StereoRenderingDevice", "49 83 BE ?? ?? ?? ?? 00 0F 95 C0 48 81 C4 60 01 00 00",
-                                     Rule::I32, 3, 0, 0, 0xd50};
+                                     Rule::I32, 3, 0, 0, 0xd50,
+                                     "49 83 BE ?? ?? ?? ?? 00 0F 95 C0 48 81 C4 20 01 00 00"};  // Xbox app: frame 0x120
 constexpr Sig kGNearClippingPlane{"GNearClippingPlane", "F3 0F 10 05 ?? ?? ?? ?? EB 05 F3 0F 10 46 0C", Rule::Rip, 0, 4, 8,
                                   0x53a49e4};
 
@@ -75,7 +84,9 @@ constexpr Sig kViewRectOverride{"CalcSceneView windowed-fullscreen view rect", "
 // The movzx after the AllocateRenderTargetTexture call in FSceneViewport::InitDynamicRHI
 // loads the pixel format the engine falls back to for the separate render target.
 constexpr Sig kSceneTargetFormat{"FSceneViewport separate target format",
-                                 "FF 50 ?? 84 C0 75 47 44 0F B6 05 ?? ?? ?? ??", Rule::Rip, 7, 4, 8, 0x53e1c78};
+                                 "FF 50 ?? 84 C0 75 47 44 0F B6 05 ?? ?? ?? ??", Rule::Rip, 7, 4, 8, 0x53e1c78,
+                                 // Xbox app: movzx eax after a jne rel32 (the format argument 2 pins the site).
+                                 "C6 44 24 20 02 FF 50 ?? 84 C0 0F 85 ?? ?? ?? ?? 0F B6 05 ?? ?? ?? ??", 16, 3, 7};
 
 // The anchor reads GUObjectArray+0x10 (the object item pointer); the global is 0x10 lower.
 constexpr Sig kGUObjectArray{"GUObjectArray", "48 8B 05 ?? ?? ?? ?? 48 8D 14 C8 EB 03 49 8B D4 81 4A 08 00 00 00 40", Rule::Rip, 0, 3, 7,
@@ -154,38 +165,49 @@ constexpr std::size_t kSlotGetMaxEverRequired = 28 * 8;      // 48 8B 81 xx xx x
 struct SlotCheck {
     Sig sig;
     std::int64_t ours;  // byte offset in our function table
+    // Steam/Epic only: on another build a miss is logged, not fatal. Used for UpdateViewport,
+    // whose call site the Xbox app build reorders: its slot (+0x08) lies before the slots
+    // +0x10..+0x30 of the same table, which are all checked, so it cannot have moved alone.
+    bool optional_on_other_builds = false;
 };
 constexpr SlotCheck kSlotChecks[] = {
     {{"IStereoRendering slot IsStereoEnabledOnNextFrame", "FF 50 ?? 84 C0 74 49 48 8B 05 ?? ?? ?? ??", Rule::U8, 2, 0, 0, 0x8},
      offsetof(ue::StereoDeviceVtbl, IsStereoEnabledOnNextFrame)},
-    {{"IStereoRendering slot AdjustViewRect", "FF 50 ?? 0F B6 4C 24 30 48 8B 56 30", Rule::U8, 2, 0, 0, 0x18},
+    {{"IStereoRendering slot AdjustViewRect", "FF 50 ?? 0F B6 4C 24 30 48 8B 56 30", Rule::U8, 2, 0, 0, 0x18,
+      "FF 50 ?? 0F B6 4C 24 30 49 8B 57 30"},
      offsetof(ue::StereoDeviceVtbl, AdjustViewRect)},
-    {{"IStereoRendering slot CalculateStereoViewOffset", "FF 50 ?? 4D 85 F6 74 2E", Rule::U8, 2, 0, 0, 0x28},
+    {{"IStereoRendering slot CalculateStereoViewOffset", "FF 50 ?? 4D 85 F6 74 2E", Rule::U8, 2, 0, 0, 0x28,
+      "FF 50 ?? 4C 8B B4 24 B8 08 00 00 48 85 F6 74 2D"},
      offsetof(ue::StereoDeviceVtbl, CalculateStereoViewOffset)},
-    {{"IStereoRendering slot GetStereoProjectionMatrix", "FF 50 ?? 8B 4C 24 40 44 8B 44 24 38", Rule::U8, 2, 0, 0, 0x30},
+    {{"IStereoRendering slot GetStereoProjectionMatrix", "FF 50 ?? 8B 4C 24 40 44 8B 44 24 38", Rule::U8, 2, 0, 0, 0x30,
+      "FF 50 ?? 44 8B 44 24 38 8B 4C 24 40"},
      offsetof(ue::StereoDeviceVtbl, GetStereoProjectionMatrix)},
-    {{"IStereoRendering slot InitCanvasFromView", "FF 50 ?? EB 3C 0F 28 87 20 02 00 00", Rule::U8, 2, 0, 0, 0x38},
+    {{"IStereoRendering slot InitCanvasFromView", "FF 50 ?? EB 3C 0F 28 87 20 02 00 00", Rule::U8, 2, 0, 0, 0x38,
+      "FF 50 ?? EB 3C 0F 28 86 20 02 00 00"},
      offsetof(ue::StereoDeviceVtbl, InitCanvasFromView)},
-    {{"IStereoRendering slot RenderTexture_RenderThread", "FF 50 ?? 48 8B 4C 24 60 48 85 C9 74 34", Rule::U8, 2, 0, 0, 0x48},
+    {{"IStereoRendering slot RenderTexture_RenderThread", "FF 50 ?? 48 8B 4C 24 60 48 85 C9 74 34", Rule::U8, 2, 0, 0, 0x48,
+      "FF 57 ?? 48 8B 4C 24 68 48 85 C9 74 2D"},
      offsetof(ue::StereoDeviceVtbl, RenderTexture_RenderThread)},
-    {{"IStereoRendering slot GetRenderTargetManager", "FF 50 ?? 48 89 45 90 4C 8B F0", Rule::U8, 2, 0, 0, 0x60},
+    {{"IStereoRendering slot GetRenderTargetManager", "FF 50 ?? 48 89 45 90 4C 8B F0", Rule::U8, 2, 0, 0, 0x60,
+      "FF 50 ?? 48 89 45 88 48 8B F0 48 85 C0 74 2D"},
      offsetof(ue::StereoDeviceVtbl, GetRenderTargetManager)},
     {{"IStereoRenderTargetManager slot UpdateViewport",
       "FF 50 ?? 48 85 DB 74 22 83 6B 08 01 75 1C 48 8B 03 48 8B CB FF 10 83 6B 0C 01 75 0E 48 8B 03 BA 01 00 00 00 48 8B CB FF 50 08 "
       "48 8B 8D A8 04 00 00",
       Rule::U8, 2, 0, 0, 0x8},
-     offsetof(ue::RenderTargetManagerVtbl, UpdateViewport)},
-    {{"IStereoRenderTargetManager slot CalculateRenderTargetSize", "41 FF 52 ?? 49 8B 16", Rule::U8, 3, 0, 0, 0x10},
+     offsetof(ue::RenderTargetManagerVtbl, UpdateViewport), true},
+    {{"IStereoRenderTargetManager slot CalculateRenderTargetSize", "41 FF 52 ?? 49 8B 16", Rule::U8, 3, 0, 0, 0x10,
+      "41 FF 52 ?? 48 8B 16 48 8B CE FF 52 28"},
      offsetof(ue::RenderTargetManagerVtbl, CalculateRenderTargetSize)},
     {{"IStereoRenderTargetManager slot NeedReAllocateViewportRenderTarget", "FF 50 ?? 84 C0 74 31 8B 87 C4 00 00 00", Rule::U8, 2, 0,
-      0, 0x18},
+      0, 0x18, "FF 50 ?? 84 C0 74 32 8B 87 C4 00 00 00"},
      offsetof(ue::RenderTargetManagerVtbl, NeedReAllocateViewportRenderTarget)},
     {{"IStereoRenderTargetManager slot NeedReAllocateDepthTexture", "FF 50 ?? 84 C0 74 13 48 8B 4F 68", Rule::U8, 2, 0, 0, 0x20},
      offsetof(ue::RenderTargetManagerVtbl, NeedReAllocateDepthTexture)},
     {{"IStereoRenderTargetManager slot GetNumberOfBufferedFrames", "FF 52 ?? 89 87 10 03 00 00", Rule::U8, 2, 0, 0, 0x28},
      offsetof(ue::RenderTargetManagerVtbl, GetNumberOfBufferedFrames)},
     {{"IStereoRenderTargetManager slot AllocateRenderTargetTexture", "FF 50 ?? 84 C0 75 47 44 0F B6 05 ?? ?? ?? ??", Rule::U8, 2, 0,
-      0, 0x30},
+      0, 0x30, "C6 44 24 20 02 FF 50 ?? 84 C0 0F 85 ?? ?? ?? ?? 0F B6 05 ?? ?? ?? ??", 7},
      offsetof(ue::RenderTargetManagerVtbl, AllocateRenderTargetTexture)},
 };
 
@@ -196,10 +218,22 @@ public:
     Resolver(std::uintptr_t base, std::size_t size, bool known) : base_(base), size_(size), known_(known) {}
 
     // Returns the resolved value: an absolute address for Rip/Match, a number for I32/U8.
-    std::optional<std::int64_t> resolve(const Sig& s) {
+    std::optional<std::int64_t> resolve(const Sig& s_in, bool quiet = false) {
+        Sig s = s_in;
         auto r = pattern::scan_module(base_, s.pattern, pattern::Sections::Executable, 2);
+        if (!r.found() && s.alt) {
+            // The Xbox app build's variant of the same code (see Sig::alt).
+            r = pattern::scan_module(base_, s.alt, pattern::Sections::Executable, 2);
+            if (r.found()) {
+                if (s.alt_a >= 0) s.a = s.alt_a;
+                if (s.alt_b >= 0) s.b = s.alt_b;
+                if (s.alt_c >= 0) s.c = s.alt_c;
+                log::debug("engine: signature '{}': Xbox app variant matched", s.name);
+            }
+        }
         if (!r.found()) {
-            log::warn("engine: signature '{}' not found", s.name);
+            if (quiet) log::info("engine: signature '{}' not found (not needed on this build)", s.name);
+            else log::warn("engine: signature '{}' not found", s.name);
             return std::nullopt;
         }
         if (!r.unique()) {
@@ -353,6 +387,15 @@ Addresses resolve_addresses(bool allow_unknown_build, const void* hmd_detour) {
     // Our device's function table layout must match the slots the engine calls.
     int slot_failures = 0;
     for (const SlotCheck& c : kSlotChecks) {
+        if (c.optional_on_other_builds && !a.known_build) {
+            auto v = r.resolve(c.sig, true);
+            if (v && *v != c.ours) {
+                log::warn("engine: {}: engine calls offset {:#x}, our table has it at {:#x}", c.sig.name, *v, c.ours);
+                fail(std::string("layout check '") + c.sig.name + "' failed");
+                ++slot_failures;
+            }
+            continue;
+        }
         const std::int64_t v = num(c.sig, true);
         if (v >= 0 && v != c.ours) {
             log::warn("engine: {}: engine calls offset {:#x}, our table has it at {:#x}", c.sig.name, v, c.ours);
