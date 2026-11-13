@@ -20,6 +20,10 @@ std::atomic<bool> g_layout_ok{false};
 //   mov rax,[rdi+8]; inc dword [rdi+14h]; mov [rax],rcx; lea rax,[ExecuteAndDestruct]; mov [rdi+8],rcx;
 //   mov [rcx+8],rax; mov [rcx],r14(=0)
 constexpr const char* kAppendSequence = "48 8B 47 08 FF 47 14 48 89 08 48 8D 05 ?? ?? ?? ?? 48 89 4F 08 48 89 41 08 4C 89 31";
+// The Microsoft Store / Xbox app build (1.0.334.0) has the same sequence and offsets, with the
+// command's Next cleared from another register (mov [rcx],rsi / rbp / ...): the part that pins
+// CommandLink +0x08, NumCommands +0x14 and the command's execute pointer +0x08.
+constexpr const char* kAppendSequenceAlt = "48 8B 47 08 FF 47 14 48 89 08 48 8D 05 ?? ?? ?? ?? 48 89 4F 08 48 89 41 08";
 
 bool readable(const void* p, std::size_t n) {
     MEMORY_BASIC_INFORMATION mbi{};
@@ -32,6 +36,7 @@ bool readable(const void* p, std::size_t n) {
 
 bool verify_layout(std::uintptr_t module_base) {
     auto r = pattern::scan_module(module_base, kAppendSequence, pattern::Sections::Executable, 1);
+    if (!r.found()) r = pattern::scan_module(module_base, kAppendSequenceAlt, pattern::Sections::Executable, 1);
     g_layout_ok = r.found();
     if (!r.found()) log::warn("engine: RHI command list layout not confirmed (append sequence not found); mirror disabled");
     return r.found();
