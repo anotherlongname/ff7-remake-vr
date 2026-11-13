@@ -29,6 +29,9 @@ using GetStateExFn = DWORD(WINAPI*)(DWORD, XINPUT_STATE*);
 using WaitGuideFn = DWORD(WINAPI*)(DWORD, DWORD, void*);
 using CancelGuideFn = DWORD(WINAPI*)(DWORD);
 using PowerOffFn = DWORD(WINAPI*)(DWORD);
+using GetAudioIdsFn = DWORD(WINAPI*)(DWORD, LPWSTR, UINT*, LPWSTR, UINT*);
+using GetBaseBusFn = DWORD(WINAPI*)(DWORD, void*);
+using GetCapsExFn = DWORD(WINAPI*)(DWORD, DWORD, DWORD, void*);
 
 struct Real {
     HMODULE module = nullptr;
@@ -44,6 +47,9 @@ struct Real {
     WaitGuideFn wait_guide = nullptr;
     CancelGuideFn cancel_guide = nullptr;
     PowerOffFn power_off = nullptr;
+    GetAudioIdsFn get_audio_ids = nullptr;   // xinput1_4
+    GetBaseBusFn get_base_bus = nullptr;     // xinput1_4, ordinal 104
+    GetCapsExFn get_caps_ex = nullptr;       // xinput1_4, ordinal 108
 };
 
 Real g_real;
@@ -53,11 +59,24 @@ BOOL CALLBACK do_load(PINIT_ONCE, PVOID, PVOID*) {
     wchar_t sys[MAX_PATH] = {};
     UINT n = GetSystemDirectoryW(sys, MAX_PATH);
     if (n == 0 || n >= MAX_PATH) return TRUE;
-    std::wstring path = std::wstring(sys) + L"\\xinput1_3.dll";
+    // This DLL is installed as xinput1_3.dll (Steam, Epic) or as xinput1_4.dll (Microsoft Store /
+    // Xbox app): forward to the system DLL of the name we were loaded under.
+    bool as_1_4 = false;
+    {
+        HMODULE self = nullptr;
+        wchar_t own[MAX_PATH] = {};
+        if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               reinterpret_cast<LPCWSTR>(&do_load), &self) &&
+            GetModuleFileNameW(self, own, MAX_PATH)) {
+            const wchar_t* base = wcsrchr(own, L'\\');
+            as_1_4 = _wcsicmp(base ? base + 1 : own, L"xinput1_4.dll") == 0;
+        }
+    }
+    std::wstring path = std::wstring(sys) + (as_1_4 ? L"\\xinput1_4.dll" : L"\\xinput1_3.dll");
     // Absolute path: never resolves back to ourselves in the game directory.
     HMODULE m = LoadLibraryExW(path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32 | LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR);
     if (!m) m = LoadLibraryW(path.c_str());
-    if (!m) {
+    if (!m && !as_1_4) {
         // Fall back to the always-present Windows 8+ XInput (same ABI, by name).
         path = std::wstring(sys) + L"\\xinput1_4.dll";
         m = LoadLibraryW(path.c_str());
@@ -78,6 +97,9 @@ BOOL CALLBACK do_load(PINIT_ONCE, PVOID, PVOID*) {
     g_real.wait_guide = reinterpret_cast<WaitGuideFn>(by_ord(101));
     g_real.cancel_guide = reinterpret_cast<CancelGuideFn>(by_ord(102));
     g_real.power_off = reinterpret_cast<PowerOffFn>(by_ord(103));
+    g_real.get_audio_ids = reinterpret_cast<GetAudioIdsFn>(by_name("XInputGetAudioDeviceIds"));
+    g_real.get_base_bus = reinterpret_cast<GetBaseBusFn>(by_ord(104));
+    g_real.get_caps_ex = reinterpret_cast<GetCapsExFn>(by_ord(108));
     return TRUE;
 }
 
@@ -596,6 +618,22 @@ DWORD WINAPI proxy_XInputCancelGuideButtonWait(DWORD user) {
 DWORD WINAPI proxy_XInputPowerOffController(DWORD user) {
     auto fn = real().power_off;
     return fn ? fn(user) : ERROR_DEVICE_NOT_CONNECTED;
+}
+
+// xinput1_4 exports (used when this DLL is installed as xinput1_4.dll).
+DWORD WINAPI proxy_XInputGetAudioDeviceIds(DWORD user, LPWSTR render, UINT* render_count, LPWSTR capture, UINT* capture_count) {
+    auto fn = real().get_audio_ids;
+    return fn ? fn(user, render, render_count, capture, capture_count) : ERROR_DEVICE_NOT_CONNECTED;
+}
+
+DWORD WINAPI proxy_XInputGetBaseBusInformation(DWORD user, void* info) {
+    auto fn = real().get_base_bus;
+    return fn ? fn(user, info) : ERROR_DEVICE_NOT_CONNECTED;
+}
+
+DWORD WINAPI proxy_XInputGetCapabilitiesEx(DWORD a, DWORD user, DWORD flags, void* caps) {
+    auto fn = real().get_caps_ex;
+    return fn ? fn(a, user, flags, caps) : ERROR_DEVICE_NOT_CONNECTED;
 }
 
 }  // extern "C"

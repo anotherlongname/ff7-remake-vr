@@ -129,7 +129,10 @@ $ErrorActionPreference = 'Stop'
 $AppId          = 1462040
 $GameProcess    = 'ff7remake_'
 $Here           = $PSScriptRoot
-$ModFiles       = @('xinput1_3.dll', 'ff7vr.ini')        # copied into End\Binaries\Win64
+$ModFiles       = @('xinput1_3.dll', 'xinput1_4.dll', 'ff7vr.ini')   # every name the launcher may install
+# What this session installs: xinput1_3.dll for Steam/Epic (End\Binaries\Win64), the same DLL as
+# xinput1_4.dll for the Microsoft Store / Xbox app build (End\Binaries\WinGDK), which does not load xinput1_3.
+$InstallFiles   = @('xinput1_3.dll', 'ff7vr.ini')
 $RuntimeFiles   = @('ff7vr.log', 'ff7vr-crash-*.dmp')   # written there by the mod
 $SessionFile    = 'ff7vr.session.json'
 $HeadsetFile    = 'ff7vr-headset.txt'                  # the last headset, kept next to this script between sessions
@@ -248,7 +251,7 @@ function Test-GameBuild($inst, [switch]$Quiet) {
 # still present to other programs (VR runtimes allow one application at a time).
 function Get-GameProcs {
     $out = @()
-    foreach ($n in @($GameProcess, 'ff7remake', 'CrashReportClient')) {
+    foreach ($n in @(@($GameProcess, 'ff7remake', 'CrashReportClient') | Select-Object -Unique)) {
         foreach ($p in @(Get-Process -Name $n -ErrorAction SilentlyContinue)) {
             try {
                 $ours = ($n -eq $GameProcess)
@@ -827,6 +830,12 @@ $inst = $found.Install
 $root = $null
 $bin = $null
 if ($inst) { $root = $inst.Root; $bin = $inst.Bin }
+# Microsoft Store / Xbox app build: the game is WinGDK\ff7remake.exe (not ff7remake_.exe) and it loads
+# xinput1_4.dll, so the mod goes in under that name.
+if ($inst) {
+    $GameProcess = [System.IO.Path]::GetFileNameWithoutExtension($inst.Exe)
+    if ((Split-Path -Leaf (Split-Path -Parent $inst.Exe)) -eq 'WinGDK') { $InstallFiles = @('xinput1_4.dll', 'ff7vr.ini') }
+}
 $others = @()
 if ($inst) { $others = @($found.All | Where-Object { $_.Exe -ne $inst.Exe }) }
 
@@ -912,7 +921,7 @@ if ($prev -and $prev.state -ne 'installed') {
 
 # Files that are in the way and are not ours: never overwrite them.
 $prev = Read-Session $bin
-foreach ($n in $ModFiles) {
+foreach ($n in $InstallFiles) {
     $p = Join-Path $bin $n
     $ours = $false
     if ($prev) { foreach ($f in @($prev.files)) { if ($f.name -eq $n) { $ours = $true } } }
@@ -926,7 +935,7 @@ if ((Test-Path -LiteralPath (Join-Path $bin $LumaOn)) -and (Test-Path -LiteralPa
     Fail "Both $LumaOn and $LumaOff exist in $bin. Decide by hand which one to keep, then start again."
     Finish 1
 }
-foreach ($n in $ModFiles) {
+foreach ($n in $InstallFiles) {
     if (-not (Test-Path -LiteralPath (Join-Path $Here $n))) { Fail "$n is missing next to this script ($Here)."; Finish 1 }
 }
 
@@ -960,7 +969,7 @@ $stamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
 $session = [pscustomobject]@{ tool = 'ff7vr launcher'; state = 'session'; started = $started; launcher = $Here;
                               lumaSetAside = $false; keepInstalled = [bool]$KeepInstalled; files = @() }
 $files = @()
-foreach ($n in $ModFiles) { $files += [pscustomobject]@{ name = $n; sha256 = (Get-Sha256 (Join-Path $Here $n)) } }
+foreach ($n in $InstallFiles) { $files += [pscustomobject]@{ name = $n; sha256 = (Get-Sha256 (Join-Path $Here $n)) } }
 $session.files = $files
 $exitCode = 0
 $gameStarted = $false
@@ -987,7 +996,7 @@ try {
     }
     $hsKept = Join-Path $Here $HeadsetFile
     if (Test-Path -LiteralPath $hsKept) { Copy-Item -LiteralPath $hsKept -Destination (Join-Path $bin $HeadsetFile) -Force }
-    Info 'Installed the mod for this session (xinput1_3.dll, ff7vr.ini)'
+    Info "Installed the mod for this session ($($InstallFiles -join ', '))"
 
     $gameArgs = '-d3d11'
     if ($ExtraArgs) { $gameArgs = "$gameArgs $ExtraArgs" }

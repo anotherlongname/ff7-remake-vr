@@ -166,7 +166,7 @@ DWORD WINAPI bootstrap(void*) {
     if (loader::xinput::load_real())
         log::info("xinput: forwarding to {}", log::narrow(loader::xinput::real_path()));
     else
-        log::warn("xinput: real xinput1_3.dll not found; gamepad calls report 'not connected'");
+        log::warn("xinput: real system XInput DLL not found; gamepad calls report 'not connected'");
     loader::xinput::set_virtual_pad_enabled(g_config.get_bool("dev", "virtual_pad", false));
     if (loader::xinput::virtual_pad_enabled()) log::info("xinput: virtual pad enabled on user index 0");
     loader::xinput::register_diagnostics(g_config.get_bool("controls", "pad_after_hooks", true));
@@ -179,7 +179,14 @@ DWORD WINAPI bootstrap(void*) {
     ctx.dll_dir = dll_dir;
     ctx.game_base = game.base;
     ctx.game_size = game.size;
-    ctx.is_game = _wcsicmp(game.path.filename().c_str(), L"ff7remake_.exe") == 0;
+    // Steam/Epic: End\Binaries\Win64\ff7remake_.exe (ff7remake.exe there is only a starter in the
+    // game's root folder). Microsoft Store / Xbox app: End\Binaries\WinGDK\ff7remake.exe is the game.
+    {
+        const auto exe_name = game.path.filename().wstring();
+        const auto exe_dir = game.path.parent_path().filename().wstring();
+        ctx.is_game = _wcsicmp(exe_name.c_str(), L"ff7remake_.exe") == 0 ||
+                      (_wcsicmp(exe_name.c_str(), L"ff7remake.exe") == 0 && _wcsicmp(exe_dir.c_str(), L"WinGDK") == 0);
+    }
     loader::start_modules(ctx);
     log::info("ff7vr: initialised, idle");
 

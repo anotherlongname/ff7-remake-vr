@@ -111,6 +111,7 @@ New-Item -ItemType Directory -Force -Path $pkg | Out-Null
 # ---- assemble (logs\ of an earlier copy stays)
 $items = [ordered]@{
     'xinput1_3.dll'      = $dll
+    'xinput1_4.dll'      = $dll   # the same DLL, installed under this name for the Microsoft Store / Xbox app build
     'ff7vr.ini'          = (Join-Path $PSScriptRoot 'ff7vr.ini')
     'ff7vr-launcher.ps1' = (Join-Path $PSScriptRoot 'launcher\ff7vr-launcher.ps1')
     'ff7vr-stores.ps1'   = (Join-Path $PSScriptRoot 'launcher\ff7vr-stores.ps1')

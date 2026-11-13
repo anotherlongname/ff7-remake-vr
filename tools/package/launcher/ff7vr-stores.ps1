@@ -29,7 +29,7 @@ $script:StoreOrder        = @('steam', 'epic', 'xbox')
 $script:StoreNames        = @{ steam = 'Steam'; epic = 'Epic Games Store'; xbox = 'Microsoft Store / Xbox app' }
 # Where the exe sits below the install folder. WinGDK is where Unreal puts the binaries of
 # a Microsoft Store (GDK) build; whether this game's Store build does so is not known.
-$script:StoreExeRelPaths = @('End\Binaries\Win64\ff7remake_.exe', 'End\Binaries\WinGDK\ff7remake_.exe')
+$script:StoreExeRelPaths = @('End\Binaries\Win64\ff7remake_.exe', 'End\Binaries\WinGDK\ff7remake_.exe', 'End\Binaries\WinGDK\ff7remake.exe')  # the Xbox app build ships WinGDK\ff7remake.exe
 # The build the mod knows (src/engine stereo_abi.h): Steam, file version 1.0.0.7.
 $script:KnownBuild = @{ FileVersion = '1.0.0.7'; SizeOfImage = 0x5EFC000; TimeDateStamp = 0x698BA49C }
 # Names that mark the game in store data (display names, package names, folder names).

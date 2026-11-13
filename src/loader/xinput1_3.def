@@ -17,3 +17,10 @@ EXPORTS
     proxy_XInputWaitForGuideButton                                          @101 NONAME
     proxy_XInputCancelGuideButtonWait                                       @102 NONAME
     proxy_XInputPowerOffController                                          @103 NONAME
+    ; xinput1_4 only. The same DLL is installed as xinput1_4.dll for the Microsoft Store /
+    ; Xbox app build (WinGDK\ff7remake.exe), which loads xinput1_4 and not xinput1_3. The
+    ; ordinals match C:\Windows\System32\xinput1_4.dll; the extra exports are unused under
+    ; the xinput1_3 name.
+    XInputGetAudioDeviceIds         = proxy_XInputGetAudioDeviceIds         @10
+    proxy_XInputGetBaseBusInformation                                       @104 NONAME
+    proxy_XInputGetCapabilitiesEx                                           @108 NONAME
