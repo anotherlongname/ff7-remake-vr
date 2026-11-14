@@ -36,6 +36,10 @@ using namespace ue;
 // bool ULocalPlayer::GetProjectionData(FViewport*, EStereoscopicPass, FSceneViewProjectionData&) const
 // (tools/re/signatures.json; docs/re/engine.md section 5).
 constexpr const char* kPattern = "40 55 53 56 57 41 54 41 56 48 8D AC 24 38 F8 FF FF";
+// Microsoft Store / Xbox app build (1.0.334.0): RVA 0x2bd2560, other registers and frame; it holds
+// the AdjustViewRect, CalculateStereoViewOffset and GetStereoProjectionMatrix calls, and stores
+// the projection at [r9+0x50] (kProjection below).
+constexpr const char* kPatternXbox = "40 55 53 57 41 55 41 57 48 8D AC 24 30 F8 FF FF 48 81 EC D0 08 00 00";
 constexpr std::uintptr_t kExpectRva = 0x3019240;
 // FSceneViewProjectionData in this build: ViewOrigin +0, ViewRotationMatrix +0x10,
 // ProjectionMatrix +0x50 (docs/re/engine.md section 5).
@@ -668,7 +672,8 @@ void start(std::uintptr_t base, bool known) {
         const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
         g_exe_end = base + nt->OptionalHeader.SizeOfImage;
     }
-    const auto r = pattern::scan_module(base, kPattern, pattern::Sections::Executable, 2);
+    auto r = pattern::scan_module(base, kPattern, pattern::Sections::Executable, 2);
+    if (!r.found()) r = pattern::scan_module(base, kPatternXbox, pattern::Sections::Executable, 2);
     if (!r.unique()) {
         log::warn("ui: ULocalPlayer::GetProjectionData: {} matches; UI markers are not aligned with the panel ([ui] align)", r.matches.size());
         return;

@@ -74,6 +74,8 @@ struct Sig {
     Rule rule;
     int offset;
     std::int64_t expect;
+    // Microsoft Store / Xbox app build (1.0.334.0): tried only when `pattern` has no match.
+    const char* alt = nullptr;
 };
 
 constexpr const char* kBeginPattern =
@@ -85,16 +87,25 @@ constexpr Sig kEnd{"FSceneRenderTargets::EndRenderingInGameUI",
                    "48 8B C4 48 89 58 08 48 89 68 10 48 89 70 18 48 89 78 20 41 56 48 83 EC 50 66 0F 6F 05 ?? ?? ?? ?? 48 8B F2 66 0F 6F "
                    "0D ?? ?? ?? ?? 48 8B 5A 30 F3 0F 7F 40 C8 48 83 C3 07 66 0F 6F 05 ?? ?? ?? ?? F3 0F 7F 40 E8 F3 0F 7F 48 D8 48 8B "
                    "81 10 01 00 00",
-                   Rule::Match, 0, 0x2541910};
-constexpr Sig kUiSize{"FSceneRenderTargets::InGameUISize", "89 87 40 02 00 00 89 8F 44 02 00 00", Rule::I32, 2, 0x240};
+                   Rule::Match, 0, 0x2541910,
+                   // Xbox app (RVA 0x22eb650, called right after BeginRenderingInGameUI as on Steam):
+                   // no clear-value constants before the InGameUIRenderTarget (+0x110) read.
+                   "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41 56 48 83 EC 50 48 8B 81 10 01 00 00 "
+                   "48 8B F2 48 8B 5A 30 48 83 C3 07"};
+constexpr Sig kUiSize{"FSceneRenderTargets::InGameUISize", "89 87 40 02 00 00 89 8F 44 02 00 00", Rule::I32, 2, 0x240,
+                      "89 86 40 02 00 00 89 8E 44 02 00 00"};  // Xbox app: in BeginRenderingInGameUI, rsi
 // FDeferredShadingSceneRenderer::Render: `test byte ptr [rdi+4Ch], 80h; jz` skips the UI
 // pass. The renderer's ViewFamily copy starts at +0x10, so the flag is at family +0x3C.
-constexpr Sig kFamilyFlag{"FSceneViewFamily in-game UI flag", "F6 47 4C 80 0F 84", Rule::U8, 2, 0x4c};
+constexpr Sig kFamilyFlag{"FSceneViewFamily in-game UI flag", "F6 47 4C 80 0F 84", Rule::U8, 2, 0x4c,
+                          "F6 46 4C 80 0F 84"};  // Xbox app: rsi
 constexpr std::size_t kRendererViewFamily = 0x10;
 constexpr std::uint8_t kFamilyFlagBit = 0x80;
 // The same flag tested by every InGameUITexture binding (`test byte ptr [r14+3Ch], 80h`, about 320 sites).
 constexpr const char* kBindingSitePattern = "41 F6 46 3C 80";
-constexpr Sig kStereoPass{"FSceneView::StereoPass", "83 BF ?? ?? ?? ?? 00 74 0E 48 8B 01", Rule::I32, 2, 0x970};
+constexpr const char* kBindingSitePatternXbox = "41 F6 47 3C 80";  // Xbox app: r15, also 320 sites
+constexpr Sig kStereoPass{"FSceneView::StereoPass", "83 BF ?? ?? ?? ?? 00 74 0E 48 8B 01", Rule::I32, 2, 0x970,
+                          // Xbox app: cmp [rsi+StereoPass], r12d (zero) before the same InitCanvasFromView call
+                          "44 39 A6 ?? ?? ?? ?? 74 0E 48 8B 01"};
 // Scene markers (tools/re/signatures.json).
 constexpr Sig kRender{"FDeferredShadingSceneRenderer::Render", "40 55 53 56 57 41 56 48 8D AC 24 80 FD FF FF", Rule::Match, 0, 0x21e64a0};
 // Its call in Render's per-view loop (`call rel32` at +14 of the pattern).
@@ -487,7 +498,8 @@ void close_scene(void*) {}
 
 // ------------------------------------------------------------------ start-up
 bool resolve(std::uintptr_t base, bool known, const Sig& s, std::int64_t* out, std::string* why) {
-    const auto r = pattern::scan_module(base, s.pattern, pattern::Sections::Executable, 2);
+    auto r = pattern::scan_module(base, s.pattern, pattern::Sections::Executable, 2);
+    if (!r.found() && s.alt) r = pattern::scan_module(base, s.alt, pattern::Sections::Executable, 2);
     if (!r.unique()) {
         *why = std::format("{}: {} matches", s.name, r.matches.size());
         return false;
@@ -578,7 +590,8 @@ bool start_ui_layer(const StartupContext& ctx) {
     }
     if (ok) {
         // The flag the renderer tests must be the one every UI binding tests.
-        const auto sites = pattern::scan_module(base, kBindingSitePattern, pattern::Sections::Executable, 512);
+        auto sites = pattern::scan_module(base, kBindingSitePattern, pattern::Sections::Executable, 512);
+        if (sites.matches.size() < 64) sites = pattern::scan_module(base, kBindingSitePatternXbox, pattern::Sections::Executable, 512);
         if (flag - static_cast<std::int64_t>(kRendererViewFamily) != 0x3c || sites.matches.size() < 64) {
             ok = false;
             why = std::format("in-game UI flag at renderer +0x{:x}, {} binding sites testing family +0x3c", flag, sites.matches.size());
